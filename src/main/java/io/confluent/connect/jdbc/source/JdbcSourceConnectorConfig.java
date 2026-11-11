@@ -108,6 +108,29 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
       = "JDBC connection backoff in milliseconds";
   public static final long CONNECTION_BACKOFF_DEFAULT = 10000L;
 
+  public static final String CONNECTION_POOL_PREFIX = CONNECTION_PREFIX + "pool.";
+
+  public static final String CONNECTION_POOL_ENABLED_CONFIG = CONNECTION_POOL_PREFIX + "enabled";
+  public static final String CONNECTION_POOL_ENABLED_DOC
+      = "Whether to take database connections from a pool that is shared by all JDBC source "
+          + "connectors and tasks running in the same Kafka Connect worker that use identical "
+          + "connection settings. When enabled, a connection is only held while a query is "
+          + "running and is returned to the pool afterwards. When disabled, every connector and "
+          + "every task keeps its own dedicated connection open.";
+  public static final String CONNECTION_POOL_ENABLED_DISPLAY = "Use shared connection pool";
+  public static final boolean CONNECTION_POOL_ENABLED_DEFAULT = false;
+
+  public static final String CONNECTION_POOL_MAX_SIZE_CONFIG = CONNECTION_POOL_PREFIX + "max.size";
+  public static final String CONNECTION_POOL_MAX_SIZE_DOC
+      = "Maximum number of connections a Kafka Connect worker opens to the database for all "
+          + "connectors sharing the pool. Queries wait for a free connection when all of them "
+          + "are in use. Only applies if ``" + CONNECTION_POOL_ENABLED_CONFIG + "`` is set. "
+          + "Connectors only share a pool if this and all other ``connection.*`` settings "
+          + "(except ``" + CONNECTION_ATTEMPTS_CONFIG + "`` and ``" + CONNECTION_BACKOFF_CONFIG
+          + "``) are identical.";
+  public static final String CONNECTION_POOL_MAX_SIZE_DISPLAY = "Connection pool maximum size";
+  public static final int CONNECTION_POOL_MAX_SIZE_DEFAULT = 10;
+
   public static final String POLL_INTERVAL_MS_CONFIG = "poll.interval.ms";
   private static final String POLL_INTERVAL_MS_DOC = "Frequency in ms to poll for new data in "
                                                      + "each table.";
@@ -742,6 +765,28 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
         ++orderInGroup,
         Width.SHORT,
         CONNECTION_BACKOFF_DISPLAY
+    ).define(
+        CONNECTION_POOL_ENABLED_CONFIG,
+        Type.BOOLEAN,
+        CONNECTION_POOL_ENABLED_DEFAULT,
+        Importance.LOW,
+        CONNECTION_POOL_ENABLED_DOC,
+        DATABASE_GROUP,
+        ++orderInGroup,
+        Width.SHORT,
+        CONNECTION_POOL_ENABLED_DISPLAY,
+        Arrays.asList(CONNECTION_POOL_MAX_SIZE_CONFIG)
+    ).define(
+        CONNECTION_POOL_MAX_SIZE_CONFIG,
+        Type.INT,
+        CONNECTION_POOL_MAX_SIZE_DEFAULT,
+        ConfigDef.Range.atLeast(1),
+        Importance.LOW,
+        CONNECTION_POOL_MAX_SIZE_DOC,
+        DATABASE_GROUP,
+        ++orderInGroup,
+        Width.SHORT,
+        CONNECTION_POOL_MAX_SIZE_DISPLAY
     );
     return orderInGroup;
   }
@@ -1472,6 +1517,14 @@ public class JdbcSourceConnectorConfig extends AbstractConfig {
 
   public Duration pollLingerMs() {
     return Duration.ofMillis(getLong(POLL_LINGER_MS_CONFIG));
+  }
+
+  public boolean connectionPoolEnabled() {
+    return getBoolean(CONNECTION_POOL_ENABLED_CONFIG);
+  }
+
+  public int connectionPoolMaxSize() {
+    return getInt(CONNECTION_POOL_MAX_SIZE_CONFIG);
   }
 
 

@@ -215,6 +215,10 @@ public class TableQuerierProcessor {
     TableQuerier removedQuerier = tableQueue.poll();
     assert removedQuerier == expectedHead;
     expectedHead.reset(time.milliseconds(), resetOffset);
+    if (config.connectionPoolEnabled()) {
+      // Hand the connection back to the shared pool until the next query needs one
+      cachedConnectionProvider.close();
+    }
     if (!resetOffset) {
       tableQueue.add(expectedHead);
     }

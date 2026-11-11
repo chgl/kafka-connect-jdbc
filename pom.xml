@@ -64,6 +64,8 @@
         <slf4j.version>1.7.36</slf4j.version>
         <reload4j.version>1.2.19</reload4j.version>
         <jsqlparser.version>4.9</jsqlparser.version>
+        <!-- 4.x is the last HikariCP line that still supports Java 8 -->
+        <hikaricp.version>4.0.3</hikaricp.version>
         <licenses.name>Confluent Community License</licenses.name>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.package.home>target/${project.artifactId}-${project.version}-package</project.package.home>
@@ -116,6 +118,18 @@
             <groupId>com.github.jsqlparser</groupId>
             <artifactId>jsqlparser</artifactId>
             <version>${jsqlparser.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>${hikaricp.version}</version>
+            <exclusions>
+                <!-- provided by the Kafka Connect runtime -->
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
          <!-- JDBC drivers, only included in runtime so they get packaged -->
         <dependency>

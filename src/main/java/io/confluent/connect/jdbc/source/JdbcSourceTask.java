@@ -46,6 +46,7 @@ import io.confluent.connect.jdbc.dialect.DatabaseDialects;
 import io.confluent.connect.jdbc.util.CachedConnectionProvider;
 import io.confluent.connect.jdbc.util.ColumnDefinition;
 import io.confluent.connect.jdbc.util.ColumnId;
+import io.confluent.connect.jdbc.util.ConnectionProvider;
 import io.confluent.connect.jdbc.util.RecordQueue;
 import io.confluent.connect.jdbc.util.TableCollectionUtils;
 import io.confluent.connect.jdbc.util.TableId;
@@ -66,6 +67,8 @@ public class JdbcSourceTask extends SourceTask {
   private DatabaseDialect dialect;
   //Visible for Testing
   CachedConnectionProvider cachedConnectionProvider;
+  // Only set if connection.pool.enabled; connections then come from this pool, not the dialect
+  private SharedConnectionPool connectionPool;
   PriorityQueue<TableQuerier> tableQueue = new PriorityQueue<>();
   protected RecordQueue<SourceRecord> engine;
   private TableQuerierProcessor tableQuerierProcessor;
@@ -134,6 +137,9 @@ public class JdbcSourceTask extends SourceTask {
     }
     log.info("Using JDBC dialect {}", dialect.name());
 
+    if (config.connectionPoolEnabled()) {
+      connectionPool = SharedConnectionPool.acquire(config);
+    }
     cachedConnectionProvider = connectionProvider(maxConnAttempts, retryBackoff);
 
 
@@ -353,6 +359,12 @@ public class JdbcSourceTask extends SourceTask {
       }
     }
 
+    if (connectionPool != null) {
+      // The startup checks are done, so hand the connection back to the pool. This has to
+      // happen before the processor starts using the provider from its own thread.
+      cachedConnectionProvider.close();
+    }
+
     if (!tableQueue.isEmpty()) {
       startTableQuerierProcessor();
     }
@@ -444,11 +456,21 @@ public class JdbcSourceTask extends SourceTask {
   }
 
   protected CachedConnectionProvider connectionProvider(int maxConnAttempts, long retryBackoff) {
-    return new CachedConnectionProvider(dialect, maxConnAttempts, retryBackoff) {
+    final ConnectionProvider provider = connectionPool != null ? connectionPool : dialect;
+    return new CachedConnectionProvider(provider, maxConnAttempts, retryBackoff) {
       @Override
       protected void onConnect(final Connection connection) throws SQLException {
         super.onConnect(connection);
         connection.setAutoCommit(false);
+        if (connectionPool != null) {
+          // A pooled connection comes back with the pool's default settings on every borrow
+          TransactionIsolationMode isolationMode = TransactionIsolationMode.valueOf(
+              config.getString(JdbcSourceConnectorConfig.TRANSACTION_ISOLATION_MODE_CONFIG)
+          );
+          if (isolationMode != TransactionIsolationMode.DEFAULT) {
+            dialect.setConnectionIsolationMode(connection, isolationMode);
+          }
+        }
       }
     };
   }
@@ -546,6 +568,10 @@ public class JdbcSourceTask extends SourceTask {
         log.warn("Error while closing the {} dialect: ", dialect.name(), t);
       } finally {
         dialect = null;
+        if (connectionPool != null) {
+          connectionPool.release();
+          connectionPool = null;
+        }
       }
     }
   }

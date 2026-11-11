@@ -39,8 +39,10 @@ import io.confluent.connect.jdbc.dialect.DatabaseDialects;
 import io.confluent.connect.jdbc.source.JdbcSourceConnectorConfig;
 import io.confluent.connect.jdbc.source.JdbcSourceTask;
 import io.confluent.connect.jdbc.source.JdbcSourceTaskConfig;
+import io.confluent.connect.jdbc.source.SharedConnectionPool;
 import io.confluent.connect.jdbc.source.TableMonitorThread;
 import io.confluent.connect.jdbc.util.CachedConnectionProvider;
+import io.confluent.connect.jdbc.util.ConnectionProvider;
 import io.confluent.connect.jdbc.util.ExpressionBuilder;
 import io.confluent.connect.jdbc.util.TableId;
 import io.confluent.connect.jdbc.util.Version;
@@ -59,6 +61,8 @@ public class JdbcSourceConnector extends SourceConnector {
   private Map<String, String> configProperties;
   private JdbcSourceConnectorConfig config;
   private CachedConnectionProvider cachedConnectionProvider;
+  // Only set if connection.pool.enabled; connections then come from this pool, not the dialect
+  private SharedConnectionPool connectionPool;
   private TableMonitorThread tableMonitorThread;
   private DatabaseDialect dialect;
 
@@ -69,6 +73,16 @@ public class JdbcSourceConnector extends SourceConnector {
 
   @Override
   public void start(Map<String, String> properties) throws ConnectException {
+    try {
+      doStart(properties);
+    } catch (RuntimeException e) {
+      // Connect doesn't stop a connector that failed to start, so give up the pool here
+      releaseConnectionPool();
+      throw e;
+    }
+  }
+
+  private void doStart(Map<String, String> properties) throws ConnectException {
     log.info("Starting JDBC Source Connector");
     try {
       configProperties = properties;
@@ -93,12 +107,19 @@ public class JdbcSourceConnector extends SourceConnector {
         dbUrl,
         config
     );
+    if (config.connectionPoolEnabled()) {
+      connectionPool = SharedConnectionPool.acquire(config);
+    }
     cachedConnectionProvider = connectionProvider(maxConnectionAttempts, connectionRetryBackoff);
     log.info("Cached Connection Provider created");
 
     // Initial connection attempt
     log.info("Initial connection attempt with the database.");
     cachedConnectionProvider.getConnection();
+    if (connectionPool != null) {
+      // Hand the connection back to the pool; the table monitor borrows one whenever it runs
+      cachedConnectionProvider.close();
+    }
 
     long tablePollMs = config.getLong(JdbcSourceConnectorConfig.TABLE_POLL_INTERVAL_MS_CONFIG);
     long tableStartupLimitMs =
@@ -142,7 +163,8 @@ public class JdbcSourceConnector extends SourceConnector {
         blacklistSet,      // Legacy
         includeListSet,    // New
         excludeListSet,    // New
-        Time.SYSTEM
+        Time.SYSTEM,
+        connectionPool != null
     );
     if (!config.getQuery().isPresent()) {
       tableMonitorThread.start();
@@ -151,7 +173,15 @@ public class JdbcSourceConnector extends SourceConnector {
   }
 
   protected CachedConnectionProvider connectionProvider(int maxConnAttempts, long retryBackoff) {
-    return new CachedConnectionProvider(dialect, maxConnAttempts, retryBackoff);
+    final ConnectionProvider provider = connectionPool != null ? connectionPool : dialect;
+    return new CachedConnectionProvider(provider, maxConnAttempts, retryBackoff);
+  }
+
+  private void releaseConnectionPool() {
+    if (connectionPool != null) {
+      connectionPool.release();
+      connectionPool = null;
+    }
   }
 
 
@@ -250,6 +280,7 @@ public class JdbcSourceConnector extends SourceConnector {
           log.warn("Error while closing the {} dialect: ", dialect, t);
         } finally {
           dialect = null;
+          releaseConnectionPool();
         }
       }
     }

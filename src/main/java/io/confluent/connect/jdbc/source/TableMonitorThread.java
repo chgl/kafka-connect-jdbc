@@ -59,6 +59,7 @@ public class TableMonitorThread extends Thread {
   private final boolean useRegexFiltering;
   private final AtomicReference<List<TableId>> tables;
   private final Time time;
+  private final boolean closeConnectionAfterUse;
 
   /**
    * Legacy constructor for backward compatibility.
@@ -91,6 +92,30 @@ public class TableMonitorThread extends Thread {
       Set<String> excludeListRegex,
       Time time
   ) {
+    this(dialect, connectionProvider, context, startupMs, pollMs,
+         whitelist, blacklist, includeListRegex, excludeListRegex, time, false);
+  }
+
+  /**
+   * Constructor that additionally controls whether the connection is kept between table checks.
+   *
+   * @param closeConnectionAfterUse true if the connection provider should be closed after every
+   *                                check rather than only after errors, which is what returns
+   *                                the connection if it was borrowed from a connection pool
+   */
+  @SuppressWarnings("checkstyle:ParameterNumber")
+  public TableMonitorThread(DatabaseDialect dialect,
+      ConnectionProvider connectionProvider,
+      ConnectorContext context,
+      long startupMs,
+      long pollMs,
+      Set<String> whitelist,
+      Set<String> blacklist,
+      Set<String> includeListRegex,
+      Set<String> excludeListRegex,
+      Time time,
+      boolean closeConnectionAfterUse
+  ) {
     this.dialect = dialect;
     this.connectionProvider = connectionProvider;
     this.context = context;
@@ -105,6 +130,7 @@ public class TableMonitorThread extends Thread {
                             || (excludeListRegex != null && !excludeListRegex.isEmpty());
     this.tables = new AtomicReference<>();
     this.time = time;
+    this.closeConnectionAfterUse = closeConnectionAfterUse;
   }
 
   @Override
@@ -270,6 +296,9 @@ public class TableMonitorThread extends Thread {
       );
       connectionProvider.close();
       return false;
+    }
+    if (closeConnectionAfterUse) {
+      connectionProvider.close();
     }
 
     final List<TableId> filteredTables;
